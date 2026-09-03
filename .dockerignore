@@ -1,0 +1,14 @@
+# The build context is the repo root, because the image carries shlf and mods/
+# as its payload. Everything the Dockerfile does not COPY is dead weight here.
+.git
+.github
+.beads
+.serena
+.claude
+test
+README.md
+mise.toml
+AGENTS.md
+CLAUDE.md
+**/__pycache__
+**/*.pyc

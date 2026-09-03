@@ -31,7 +31,7 @@ quickly from the online config page.
 ## Hosting
 At the present time, I'm not advertising public hosting. Even if I did, I'd highly suggest you just
 run it yourself anyway - wherever you host the scripts should be somewhere you highly trust as it would be
-all too easy for a malicious hoster to inject something nasty. 
+all too easy for a malicious hoster to inject something nasty.
 
 ## LLMs
 If you couldn't tell, yes, this was largely LLM generated and refined further by additional prompting
@@ -322,8 +322,18 @@ pip install -r server/requirements.txt
 python3 server/app.py            # http://127.0.0.1:8080
 ```
 
-Or in a container. The build context is the repo root, since the image carries
-`shlf` and `mods/` as its payload:
+Or from the published image. CI pushes one to GitHub Container Registry on
+every push to the default branch, tagged `latest`, plus semver tags for `v*`
+releases:
+
+```sh
+docker run -d -p 8080:8080 \
+  -e SHELLF_PUBLIC_URL=https://sh.example.com \
+  ghcr.io/matchlighter/shellf:latest
+```
+
+To build it yourself, note the context is the repo root, since the image
+carries `shlf` and `mods/` as its payload:
 
 ```sh
 docker build -f server/Dockerfile -t shellf .
@@ -428,6 +438,48 @@ All tested against real containers, not assumed.
 - **The install pipe.** A piped run holds stdin, so the terminal is handed back
   before exec, which interactive tools like croc need.
 
+## Tests.
+
+```sh
+test/run.sh                 # no Docker needed
+test/smoke.sh shellf:test   # runs a built image and checks what it serves
+```
+
+`run.sh` covers everything that doesn't need a container: `shlf` under `sh`,
+`dash`, and `bash`, every module, the portable region slicing out and parsing
+on its own, `server/app.py`, and three UI suites.
+
+The UI suites run the page's real inline script through a small DOM shim in
+`test/dom.js`, pulled straight out of `server/ui/index.html`, so they test what
+ships rather than a copy of it. Several are drift guards rather than feature
+tests: the `SHLF_HOME` popup has to list as many candidates as
+`shlf_pick_home` actually tries, and the zsh popup's claims about
+`tools/zsh.d`, the shim, and `mod_install` have to still match `mods/zsh.sh`.
+Change the script and the docs fail with it.
+
+`smoke.sh` starts the image on a throwaway Docker network and checks the real
+thing: curl gets a shell script and a browser gets the page, the module index
+and one module come back, the bootstrap is there, the origin is stamped in,
+path traversal is refused — and then it does a full install from the served
+script and confirms the `PATH` form leaves `shlf` callable in a real shell.
+
+## Continuous integration.
+
+`.github/workflows/ci.yml`, in three jobs:
+
+1. **Syntax and UI tests** run `test/run.sh`, with `dash` installed first,
+   because that's what `/bin/sh` is on Debian and it's stricter than bash about
+   what this script relies on.
+2. **Image** builds for the runner, runs `test/smoke.sh` against it, and only
+   then logs in and pushes. Nothing gets published that hasn't served a real
+   install first. The push covers `linux/amd64` and `linux/arm64`, since half
+   the point of this project is boxes that aren't x86, and the image has no
+   compiled dependencies to make that slow.
+3. **Release**, on a `v*` tag only, drafts release notes carrying the
+   `docker run` line for that exact tag.
+
+Pull requests build and smoke test, but never push.
+
 ## Layout.
 
 ```
@@ -437,6 +489,9 @@ mods/<name>.sh          one per tool
 server/app.py           Bottle app
 server/ui/index.html    the WebUI
 server/Dockerfile       build context is the repo root
+test/run.sh             everything that does not need Docker
+test/smoke.sh           runs a built image and checks it
+.github/workflows/ci.yml
 ```
 
 On the box:
