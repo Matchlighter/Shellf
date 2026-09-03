@@ -56,13 +56,27 @@ shlf_die() { printf 'shlf: %s\n' "$*" >&2; exit 1; }
 shlf_dl() { # url dest
   (
     exec 3>&2                                   # the real stderr, for the final word
+    # A client that chatters on stdout must not reach ours: callers capture
+    # this function's output with $( ), and a stray line there corrupts the
+    # path they were asking for.
+    exec 1>&2
     [ "${SHLF_DEBUG:-0}" = 1 ] || exec 2>/dev/null
     set +e                                      # a failed attempt is not the end
     PATH=${SHLF_SYSPATH:-$PATH}
-    for shlf_m in curl wget ruby python3 python perl busybox fetch; do
-      command -v "$shlf_m" >/dev/null 2>&1 || continue
+    # System clients first, then a static curl we installed earlier, then the
+    # interpreters. "ours" is the one candidate that can turn up on a box with
+    # no HTTP client of its own, and it is only ever used if already cached:
+    # downloading curl in order to download something would not end well.
+    for shlf_m in curl wget ours ruby python3 python perl busybox fetch; do
+      if [ "$shlf_m" = ours ]; then
+        shlf_o=${SHLF_HOME:-/nonexistent}/tools/curl
+        [ -x "$shlf_o" ] || continue
+      else
+        command -v "$shlf_m" >/dev/null 2>&1 || continue
+      fi
       case $shlf_m in
         curl)    curl -fsSL --retry 3 --connect-timeout 10 -o "$2" "$1" ;;
+        ours)    "$shlf_o" -fsSL --retry 3 --connect-timeout 10 -o "$2" "$1" ;;
         wget)    wget -q -O "$2" "$1" ;;
         ruby)    ruby -ropen-uri -e 'IO.copy_stream(URI.open(ARGV[0]), ARGV[1])' "$1" "$2" ;;
         python3) python3 -c 'import sys,urllib.request as u; u.urlretrieve(sys.argv[1],sys.argv[2])' "$1" "$2" ;;
@@ -75,7 +89,7 @@ shlf_dl() { # url dest
       # TLS, both look installed and still fail. So try each until one works.
       [ $? -eq 0 ] && [ -s "$2" ] && exit 0
     done
-    echo "shlf: no way to download; tried curl, wget, ruby, python3, python, perl, busybox, and fetch" >&3
+    echo "shlf: no way to download; tried curl, wget, a curl of our own, ruby, python3, python, perl, busybox, and fetch" >&3
     echo "shlf: install any one of those, or copy the binaries in by hand" >&3
     exit 1
   )
@@ -192,6 +206,10 @@ shlf_platform() {
 #   SESSION 1 if this is an interactive session rather than a one-shot tool.
 #           The core then runs it and waits, so it can say how to get back in
 #           once you leave, instead of exec'ing and losing the thread.
+#   SYSTEM_OK 1 if any copy will do. When the box already has one outside our
+#           cache, that one is used and nothing is downloaded. For curl, where
+#           you want a working HTTP client rather than specifically ours, this
+#           is what makes putting it on PATH harmless.
 #
 # and may define:
 #
@@ -217,7 +235,7 @@ shlf_mod() { # name -> prints path to the module file
 }
 
 shlf_load() { # name -> populates the variables above
-  URL=; KIND=bin; EXE=$1; V=; DESC=; UNSUP=; SESSION=0
+  URL=; KIND=bin; EXE=$1; V=; DESC=; UNSUP=; SESSION=0; SYSTEM_OK=0
   unset -f mod_install 2>/dev/null || :
   shlf_f=$(shlf_mod "$1") || return 1
   . "$shlf_f"
@@ -318,6 +336,13 @@ shlf_ensure() { # tool
   SHLF_ERR=
   if ! shlf_load "$1"; then
     SHLF_ERR="unknown tool: $1 (no module at $SHLF_BASE/mods/$1.sh)"; return 1
+  fi
+  # Before UNSUP on purpose: a tool with no build for this platform can still
+  # be satisfied by whatever the box already has.
+  if [ "$SYSTEM_OK" = 1 ]; then
+    if SHLF_BIN=$(PATH=$SHLF_SYSPATH command -v "$1" 2>/dev/null); then
+      [ -n "$SHLF_BIN" ] && return 0
+    fi
   fi
   if [ -n "$UNSUP" ]; then SHLF_ERR=$UNSUP; return 1; fi
 
@@ -539,11 +564,15 @@ shlf_pick_home
 shlf_syspath
 shlf_platform
 
-# argv0 dispatch, so a symlink named croc runs croc.
+# argv0 dispatch, so a symlink named croc runs croc. The discriminator is
+# whether we have a script file, not a list of names: a piped run has no file
+# and $0 is then the interpreter's own name — sh, bash, -bash — which must not
+# be taken for a tool. With a file we are a symlink, and argv0 is how it says
+# which tool it is, including the ones named after shells.
 shlf_argv0=${0##*/}
 case $shlf_argv0 in
-  shlf*|sh|dash|ash|bash|busybox|-sh|-ash|-bash) : ;;
-  *) set -- "$shlf_argv0" "$@" ;;
+  shlf*) : ;;
+  *) [ -z "$SHLF_SELF" ] || set -- "$shlf_argv0" "$@" ;;
 esac
 
 # A bare `shlf` is an alias for the default command, and also the one case where

@@ -107,7 +107,10 @@ ok('gives the unpacked size', zbody.includes('23.7'));
 ok('gives the wire size', zbody.includes('3.6'));
 ok('compares with the other two', zbody.includes('14.1') && zbody.includes('2.3'));
 ok('mentions the hook it needs', zbody.includes('mod_install'));
-ok('the card note is short and concrete', src.includes('note: "24 MB unpacked"'));
+// Wording is yours to change; what matters is that the note stays short and
+// the detail lives in the popup.
+ok('the zsh note stays short, with the detail in the popup',
+   /note: "[^"]{1,26}",\s*help: "zshHelp"/.test(src));
 
 // --- the fish easter egg ------------------------------------------------
 const shellsHtml = els.shells._html;

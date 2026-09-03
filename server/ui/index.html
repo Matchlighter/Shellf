@@ -479,9 +479,10 @@
     Python, Perl, or busybox, and tells you plainly when the box has none of
     them. Each tool is a module under <code>/mods/</code>, fetched the first
     time you ask for it and cached after that. <code>curl</code> and
-    <code>busybox</code> are never put on <code>PATH</code> automatically,
-    since shadowing them would hijack other scripts on the box. Presets and
-    preferences live in this browser only.
+    <code>busybox</code> are linked like the rest but defer to the box's own
+    copy when there is one, so putting them on <code>PATH</code> never costs a
+    download and never shadows a working client. Presets and preferences live
+    in this browser only.
   </footer>
 </div>
 
@@ -976,6 +977,7 @@
           <td><label for="eager-${t.name}"><code>${t.name}</code></label></td>
           <td><label for="eager-${t.name}">${t.desc}${
             t.flags.includes("linux") ? '<span class="badge">Linux only</span>' : ""}${
+            t.flags.includes("usesys") ? '<span class="badge">system if present</span>' : ""}${
             t.flags.includes("nolink") ? '<span class="badge">not on PATH</span>' : ""}</label></td>
         </tr>`).join("");
       document.querySelectorAll('#tools input[type="checkbox"]').forEach((c) => {

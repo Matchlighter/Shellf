@@ -36,6 +36,23 @@ else
   say "   FAIL portable markers missing or out of order"; fail=1
 fi
 
+say "== index flags agree with the modules"
+# usesys is the index's summary of a module's SYSTEM_OK. Two files, one fact,
+# so check they still say the same thing.
+drift=0
+for f in mods/*.sh; do
+  n=$(basename "$f" .sh)
+  if grep -q '^SYSTEM_OK=1' "$f"; then mod=1; else mod=0; fi
+  if grep -qE "^$n[[:space:]]+[^[:space:]]*usesys" mods/index; then idx=1; else idx=0; fi
+  if [ "$mod" != "$idx" ]; then
+    say "   FAIL $n: module SYSTEM_OK=$mod but index usesys=$idx"
+    fail=1; drift=1
+  fi
+done
+if [ "$drift" = 0 ]; then
+  say "   ok   $(grep -cE '^[a-z].*usesys' mods/index) tools marked usesys, matching their modules"
+fi
+
 say "== python"
 if python3 -c 'import ast,sys; ast.parse(open("server/app.py").read())'; then
   say "   ok   server/app.py parses"

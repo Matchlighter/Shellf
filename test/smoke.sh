@@ -76,5 +76,31 @@ SCRIPT
 check "shlf lands on PATH" '/tmp/p/bin/shlf' "$out"
 check "and runs a tool"    'jq-'             "$out"
 
+printf '== curl and busybox are linked, and defer to a copy the box already has\n'
+# The body goes to a file rather than a heredoc inside $( ), which silently
+# swallowed the rest of this script when it was written that way.
+# Order matters twice over: jq resolves before the fake curl exists, because a
+# downloader that echoes marker text would fail every fetch, and the fake has
+# to exist before curl is resolved at all.
+probe=${TMPDIR:-/tmp}/shlf-curl-probe.$$
+cat > "$probe" <<CURLTEST
+export SHLF_HOME=/tmp/c
+wget -qO- $U/ | SHLF_DEFAULT=none sh >/dev/null 2>&1
+ls /tmp/c/bin/curl >/dev/null 2>&1 && echo CURL-LINKED
+ls /tmp/c/bin/busybox >/dev/null 2>&1 && echo BB-LINKED
+/tmp/c/bin/shlf which jq
+/tmp/c/bin/shlf which busybox
+printf '#!/bin/sh\necho fake\n' > /usr/local/bin/curl
+chmod +x /usr/local/bin/curl
+/tmp/c/bin/shlf which curl
+CURLTEST
+out=$(docker run --rm -i --network "$NET" alpine sh -s < "$probe" 2>&1)
+rm -f "$probe"
+check "curl is linked onto PATH"          'CURL-LINKED'          "$out"
+check "so is busybox"                     'BB-LINKED'            "$out"
+check "other tools resolve to ours"       '/tmp/c/tools/jq'      "$out"
+check "busybox defers to the system one"  '/bin/busybox'         "$out"
+check "curl defers to the system one"     '/usr/local/bin/curl'  "$out"
+
 [ "$fail" = 0 ] && printf '\nsmoke test passed\n'
 exit $fail

@@ -7,7 +7,8 @@ const code = uiSource();
 const INDEX = `# name flags desc
 bash    -              GNU bash, statically linked
 croc    -              encrypted file transfer with a code phrase
-curl    nolink,linux   HTTP client, statically linked
+busybox linux,usesys   applets in one binary
+nolinker nolink        kept to exercise the flag
 dust    -              disk usage, sorted and visual
 fd      -              friendlier find
 fish    linux          friendly interactive shell
@@ -146,6 +147,17 @@ const ok = (label, cond) => eq(label, !!cond, true);
   s.pick('modes', 'curl'); s.change();
   ok('back to a pipe restores the prompt', s.els.prompt.hidden === false);
   eq('mode change persisted', s.mode(), 'curl');
+
+  // --- flag badges --------------------------------------------------------
+  // Four expected from the fixture: busybox carries linux and usesys, fish
+  // carries linux, nolinker carries nolink. Everything else is unflagged.
+  s = start({});
+  await s.tick();
+  const th = s.els.tools._html;
+  ok('Linux-only tools are badged', th.includes('Linux only'));
+  ok('usesys tools are badged', th.includes('system if present'));
+  ok('nolink tools are badged', th.includes('not on PATH'));
+  eq('and nothing else is', (th.match(/class="badge"/g) || []).length, 4);
 
   // --- tools disclosure ---------------------------------------------------
   s = start({});

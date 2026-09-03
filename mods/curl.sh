@@ -1,7 +1,11 @@
 # curl — statically linked, for boxes that have no HTTP client at all.
-# Deliberately flagged nolink in the index: a curl stub ahead of the real one
-# on PATH would hijack every other script on the box.
+#
+# SYSTEM_OK, because what you want here is a working HTTP client, not
+# specifically this one. If the box already has curl, that is what runs and
+# nothing is downloaded, which is what makes it safe to put on PATH ahead of
+# the system copy.
 DESC="HTTP client, statically linked"
+SYSTEM_OK=1
 V=${SHLF_V_CURL:-8.21.0}
 KIND=tarxz
 if [ "$OS" = linux ]; then

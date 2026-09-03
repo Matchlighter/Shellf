@@ -165,6 +165,7 @@ variable in scope and sets:
 | `DESC` | One line, for `shlf list` |
 | `UNSUP` | Why it can't run here. Blocks install with that message |
 | `SESSION` | `1` for an interactive session, so the core waits and then prints how to get back in |
+| `SYSTEM_OK` | `1` if any copy will do, so a box that already has one is used instead of downloading. Mirror it as `usesys` in the index |
 
 The whole of `mods/croc.sh`:
 
@@ -206,15 +207,32 @@ costs one fetch instead of one per tool. Three whitespace-separated fields:
 ```
 # name    flags          description
 croc      -              encrypted file transfer with a code phrase
-curl      nolink,linux   HTTP client, statically linked
+curl      linux,usesys   HTTP client, statically linked
 ```
 
 `nolink` keeps a tool out of `shlf link`, and `linux` marks a Linux-only build
 so it isn't linked elsewhere. The module stays authoritative; these flags only
 save `link` from fetching every module to find out.
 
-`curl` and `busybox` are `nolink` on purpose: a stub named `curl` ahead of the
-real one on `PATH` would hijack every other script on the box.
+| Flag | Meaning |
+| --- | --- |
+| `nolink` | Keep it out of `shlf link`, so its name never lands on `PATH` |
+| `linux` | Linux-only build, so don't link it elsewhere |
+| `usesys` | A copy the box already has will do, mirroring the module's `SYSTEM_OK` |
+
+No shipped module uses `nolink` any more; it stays supported for your own. The
+flags are the index's cheap summary of what the modules say, so `list`, `link`,
+and the WebUI don't have to fetch all fifteen to find out — and a test asserts
+`usesys` and `SYSTEM_OK` still agree, since that is one fact living in two
+files.
+
+`curl` and `busybox` are both linked, and safe to link, because their modules
+set `SYSTEM_OK=1`. If the box already has one, the stub execs that and
+downloads nothing, so putting them on `PATH` neither costs a download nor
+shadows a working client. Only a box without one pays for the static build.
+That is also why `SYSTEM_OK` is checked before `UNSUP`: on macOS, where no
+static curl is published, the system curl still satisfies the request, and on
+arm64, where busybox.net publishes nothing at all, the box's own busybox does.
 
 ## Tools.
 
@@ -248,6 +266,11 @@ FreeBSD's `fetch`. Presence is not capability. A Debian slim image has `perl`
 but not `LWP::Simple`, and busybox is often built without TLS; both look
 installed and still fail. Per-attempt noise is hidden, so you get one clear
 message instead of a pile of errors. `SHLF_DEBUG=1` shows them all.
+
+`shlf_dl` writes nothing to stdout, whatever the client does with it. Callers
+capture its output with `$( )`, so a client that chatters — a wrapper script
+logging a line, say — would otherwise corrupt the path being asked for. Client
+output goes to stderr, and is hidden unless `SHLF_DEBUG=1`.
 
 **Two, that same code can be pasted in.** `GET /bootstrap` returns a short
 script the server assembles from the marked region of `shlf` itself, so the
@@ -336,7 +359,7 @@ To build it yourself, note the context is the repo root, since the image
 carries `shlf` and `mods/` as its payload:
 
 ```sh
-docker build -f server/Dockerfile -t shellf .
+docker build -t shellf .
 docker run -d -p 8080:8080 -e SHELLF_PUBLIC_URL=https://sh.example.com shellf
 ```
 
@@ -421,10 +444,17 @@ this:
 
 All tested against real containers, not assumed.
 
-- **No curl, no wget, nothing.** Eight clients tried in turn until one
-  actually works, and a paste-in bootstrap for when you can't even fetch the
-  script. Ruby matters most in practice: app servers often have it when they
-  have no curl.
+- **A linked tool named after a shell.** `bash` and `busybox` are both tool
+  names and interpreter names. argv0 dispatch decides between them by whether
+  there is a script file at all: a piped run has none, so `$0` is the
+  interpreter and never a tool; a symlink is a file, so `$0` is the tool.
+- **No curl, no wget, nothing.** Nine candidates tried in turn until one
+  actually works: system curl, wget, then a static curl we installed earlier,
+  then Ruby, python3, python, Perl, busybox, and FreeBSD's `fetch`. Plus a
+  paste-in bootstrap for when you can't even fetch the script. Ruby matters
+  most in practice: app servers often have it when they have no curl. Our own
+  curl is only ever used if already cached, since downloading curl in order to
+  download something would not end well.
 - **No `xz`.** Tries `xz`, `unxz`, `xzcat`, python3's stdlib `lzma`, then
   busybox. A box with only Ruby can't unpack `.tar.xz` at all, so mirror those.
 - **noexec `/tmp`.** The cache probe writes a script and runs it, so it detects
@@ -447,7 +477,8 @@ test/smoke.sh shellf:test   # runs a built image and checks what it serves
 
 `run.sh` covers everything that doesn't need a container: `shlf` under `sh`,
 `dash`, and `bash`, every module, the portable region slicing out and parsing
-on its own, `server/app.py`, and three UI suites.
+on its own, the index's `usesys` flags agreeing with the modules' `SYSTEM_OK`,
+`server/app.py`, and three UI suites.
 
 The UI suites run the page's real inline script through a small DOM shim in
 `test/dom.js`, pulled straight out of `server/ui/index.html`, so they test what
@@ -488,7 +519,7 @@ mods/index              the tool list
 mods/<name>.sh          one per tool
 server/app.py           Bottle app
 server/ui/index.html    the WebUI
-server/Dockerfile       build context is the repo root
+Dockerfile              context is the repo root, so it can carry shlf and mods/
 test/run.sh             everything that does not need Docker
 test/smoke.sh           runs a built image and checks it
 .github/workflows/ci.yml

@@ -1,9 +1,10 @@
 # name       flags          description
-# flags: nolink = do not symlink onto PATH; linux = Linux-only build
+# flags: nolink = do not symlink onto PATH; linux = Linux-only build;
+#        usesys = a copy the box already has will do (module sets SYSTEM_OK)
 bash         -              GNU bash, statically linked
-busybox      nolink,linux   hundreds of applets in one static binary
+busybox      linux,usesys   hundreds of applets in one static binary
 croc         -              encrypted file transfer with a code phrase
-curl         nolink,linux   HTTP client, statically linked
+curl         linux,usesys   HTTP client, statically linked
 dust         -              disk usage, sorted and visual
 fd           -              friendlier find
 fish         linux          friendly interactive shell
