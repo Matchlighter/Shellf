@@ -1,0 +1,16 @@
+# name       flags          description
+# flags: nolink = do not symlink onto PATH; linux = Linux-only build
+bash         -              GNU bash, statically linked
+busybox      nolink,linux   hundreds of applets in one static binary
+croc         -              encrypted file transfer with a code phrase
+curl         nolink,linux   HTTP client, statically linked
+dust         -              disk usage, sorted and visual
+fd           -              friendlier find
+fish         linux          friendly interactive shell
+jq           -              JSON processor
+rclone       -              sync to and from cloud storage
+rg           -              ripgrep, fast recursive search
+socat        linux          bidirectional data relay
+wormhole     -              magic wormhole, encrypted transfer by code phrase
+yq           -              YAML, JSON, and XML processor
+zsh          -              zsh, relocatable build with its function tree

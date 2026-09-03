@@ -1,0 +1,622 @@
+#!/bin/sh
+# Shellf — a lazy, universal entrypoint for constrained boxes. SHLF_MAGIC_a7f3
+#
+#   curl -fsSL https://sh.example.com | sh                     # install, then a shell
+#   curl -fsSL https://sh.example.com | sh -s -- croc send f   # install, then one tool
+#   ./shlf fish                                           # the full syntax
+#   ./shlf                                                # alias for the default
+#   croc send f                                           # after `shlf link`
+#
+# This core knows nothing about any particular tool. Each tool is a module,
+# fetched from $SHLF_BASE/mods/<name>.sh the first time you ask for it and
+# cached after that. Adding a tool means dropping one file on the host.
+#
+# POSIX sh only: works under dash, busybox ash, and bash.
+#
+# Layout:  $SHLF_HOME/tools/<tool>    binaries, fetched on first use
+#          $SHLF_HOME/mods/<tool>.sh  modules, fetched on first use
+#          $SHLF_HOME/bin/shlf        this script, plus one symlink per tool
+#          $SHLF_HOME/home/           its own $HOME: config, history, dotfiles
+# $SHLF_HOME/bin goes on PATH. Symlinks exist before their binaries do, so
+# typing `rg` is what triggers the download.
+
+set -eu
+
+SHLF_DEPTH=${SHLF_DEPTH:-0}
+[ "$SHLF_DEPTH" -lt 3 ] || { echo "shlf: dispatch loop (depth $SHLF_DEPTH); run 'shlf clean'" >&2; exit 1; }
+export SHLF_DEPTH=$((SHLF_DEPTH + 1))
+
+SHLF_BASE=${SHLF_BASE:-https://sh.example.com}  # where this script and mods/ are hosted
+SHLF_MODS=${SHLF_MODS:-}                   # local module dir, for development
+SHLF_MIRROR=${SHLF_MIRROR:-}               # optional binary mirror you control
+SHLF_MIRROR_ONLY=${SHLF_MIRROR_ONLY:-0}    # 1 = never touch upstream
+SHLF_STRICT=${SHLF_STRICT:-0}              # 1 = refuse unverified binaries
+SHLF_REFRESH=${SHLF_REFRESH:-0}            # 1 = re-download even if cached
+SHLF_DEFAULT=${SHLF_DEFAULT:-fish}         # what a bare `shlf` runs
+SHLF_EAGER=${SHLF_EAGER:-}                 # tools to install up front, not on first use
+SHLF_KEEP_HOME=${SHLF_KEEP_HOME:-0}        # 1 = use your real $HOME instead of its own
+
+# --- portable:begin ---
+# ------------------------------------------------------------------ output ----
+
+shlf_say() { printf 'shlf: %s\n' "$*" >&2; }
+shlf_quote() { # a path, shell-safe, quoted only when it has to be
+  case $1 in
+    *[!A-Za-z0-9_./:@%+-]*) printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")" ;;
+    *) printf '%s' "$1" ;;
+  esac
+}
+shlf_die() { printf 'shlf: %s\n' "$*" >&2; exit 1; }
+
+# ---------------------------------------------------------------- download ----
+# Tries curl, wget, then interpreters. Ruby matters: app servers often have it
+# when they have no curl, and busybox wget is frequently built without TLS.
+# The subshell keeps PATH=${SHLF_SYSPATH:-$PATH} scoped to the lookup.
+
+shlf_dl() { # url dest
+  (
+    exec 3>&2                                   # the real stderr, for the final word
+    [ "${SHLF_DEBUG:-0}" = 1 ] || exec 2>/dev/null
+    set +e                                      # a failed attempt is not the end
+    PATH=${SHLF_SYSPATH:-$PATH}
+    for shlf_m in curl wget ruby python3 python perl busybox fetch; do
+      command -v "$shlf_m" >/dev/null 2>&1 || continue
+      case $shlf_m in
+        curl)    curl -fsSL --retry 3 --connect-timeout 10 -o "$2" "$1" ;;
+        wget)    wget -q -O "$2" "$1" ;;
+        ruby)    ruby -ropen-uri -e 'IO.copy_stream(URI.open(ARGV[0]), ARGV[1])' "$1" "$2" ;;
+        python3) python3 -c 'import sys,urllib.request as u; u.urlretrieve(sys.argv[1],sys.argv[2])' "$1" "$2" ;;
+        python)  python -c 'import sys,urllib; urllib.urlretrieve(sys.argv[1],sys.argv[2])' "$1" "$2" ;;
+        perl)    perl -MLWP::Simple -e 'exit(getstore($ARGV[0],$ARGV[1])==200?0:1)' "$1" "$2" ;;
+        busybox) busybox wget -q -O "$2" "$1" ;;   # wget can be missing as a name
+        fetch)   fetch -q -o "$2" "$1" ;;          # FreeBSD
+      esac
+      # Presence is not capability: perl without LWP, or busybox built without
+      # TLS, both look installed and still fail. So try each until one works.
+      [ $? -eq 0 ] && [ -s "$2" ] && exit 0
+    done
+    echo "shlf: no way to download; tried curl, wget, ruby, python3, python, perl, busybox, and fetch" >&3
+    echo "shlf: install any one of those, or copy the binaries in by hand" >&3
+    exit 1
+  )
+}
+
+# --- portable:end ---
+# The marked region above is self-contained. The server slices it out to
+# assemble the paste-in bootstrap at /bootstrap, so a bare box runs the very
+# same detection this script uses.
+
+# -------------------------------------------------------------- cache home ----
+# Constrained boxes often have a read-only $HOME or a noexec /tmp, so probe for
+# a dir that is both writable AND allows exec. Running the probe is the test:
+# noexec refuses shell scripts too, so a successful run proves both at once.
+
+shlf_try_home() { # dir
+  mkdir -p "$1/bin" "$1/tools" "$1/mods" 2>/dev/null || return 1
+  shlf_p=$1/.probe.$$
+  printf '#!/bin/sh\nexit 7\n' >"$shlf_p" 2>/dev/null || return 1
+  chmod +x "$shlf_p" 2>/dev/null || { rm -f "$shlf_p"; return 1; }
+  shlf_rc=0; "$shlf_p" >/dev/null 2>&1 || shlf_rc=$?
+  rm -f "$shlf_p"
+  [ "$shlf_rc" -eq 7 ] || return 1
+  SHLF_HOME=$1
+}
+
+shlf_pick_home() {
+  shlf_uid=$(id -u 2>/dev/null || echo 0)
+  # A copy of ourselves living in a cache can work out where that cache is,
+  # which is what makes the re-entry command a bare path and lets a linked
+  # tool work from a fresh shell with nothing exported.
+  if [ -z "${SHLF_HOME:-}" ] && [ -n "$SHLF_SELF" ]; then
+    shlf_d=${SHLF_SELF%/*}
+    case $shlf_d in
+      /*/bin)
+        shlf_p=${shlf_d%/bin}
+        if [ -d "$shlf_p/tools" ] && [ -d "$shlf_p/mods" ]; then SHLF_HOME=$shlf_p; fi ;;
+    esac
+  fi
+  if [ -n "${SHLF_HOME:-}" ]; then
+    shlf_try_home "$SHLF_HOME" || shlf_die "SHLF_HOME=$SHLF_HOME needs write and exec permission"
+  else
+    for shlf_d in \
+      "${XDG_CACHE_HOME:-${HOME:-/nonexistent}/.cache}/shlf" \
+      "${HOME:-/nonexistent}/.shlf" \
+      "/dev/shm/shlf-$shlf_uid" \
+      "/tmp/shlf-$shlf_uid" \
+      "$PWD/.shlf"
+    do
+      shlf_try_home "$shlf_d" && break
+    done
+  fi
+  [ -n "${SHLF_HOME:-}" ] || shlf_die "found no writable, exec-capable dir; set SHLF_HOME to one"
+  export SHLF_HOME     # children must share this cache, not pick a new one
+}
+
+# Our own stub dir, removed from PATH. Helper lookups run against this instead,
+# so a stub named `curl` can never hijack the download that would fetch it.
+shlf_syspath() {
+  shlf_o=$IFS; IFS=:; set -f
+  SHLF_SYSPATH=
+  for shlf_p in $PATH; do
+    shlf_q=${shlf_p:-.}
+    case $shlf_q in "$SHLF_HOME/bin") continue ;; esac
+    SHLF_SYSPATH=${SHLF_SYSPATH:+$SHLF_SYSPATH:}$shlf_q
+  done
+  set +f; IFS=$shlf_o
+  : "${SHLF_SYSPATH:=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin}"
+}
+
+# ----------------------------------------------------------------- platform ----
+# Every project spells platforms differently, so compute each dialect once.
+# Modules read these: OS OS_M OS_C A_GO A_UN A_C A_RS A_RUST A_CROC LIBC
+
+shlf_platform() {
+  shlf_os=$(uname -s 2>/dev/null || echo Linux)
+  shlf_ar=$(uname -m 2>/dev/null || echo x86_64)
+  case $shlf_os in
+    Linux)   OS=linux;   OS_M=linux;   OS_C=Linux ;;
+    Darwin)  OS=darwin;  OS_M=macos;   OS_C=macOS ;;
+    FreeBSD) OS=freebsd; OS_M=freebsd; OS_C=FreeBSD ;;
+    *) shlf_die "unsupported OS: $shlf_os" ;;
+  esac
+  case $shlf_ar in
+    x86_64|amd64)  A_GO=amd64;   A_UN=x86_64;  A_C=64bit;   A_RS=x86_64 ;;
+    aarch64|arm64) A_GO=arm64;   A_UN=aarch64; A_C=ARM64;   A_RS=aarch64 ;;
+    armv7*|armv6*) A_GO=arm;     A_UN=armhf;   A_C=ARM;     A_RS= ;;
+    i686|i386)     A_GO=386;     A_UN=x86;     A_C=32bit;   A_RS= ;;
+    riscv64)       A_GO=riscv64; A_UN=riscv64; A_C=RISCV64; A_RS= ;;
+    *) shlf_die "unsupported arch: $shlf_ar" ;;
+  esac
+  if ls /lib/ld-musl-* >/dev/null 2>&1; then LIBC=musl
+  elif command -v ldd >/dev/null 2>&1 && ldd --version 2>&1 | grep -qi musl; then LIBC=musl
+  else LIBC=gnu
+  fi
+  A_CROC="${OS_C}-${A_C}"
+  case $OS in
+    darwin) A_RUST="${A_RS}-apple-darwin" ;;
+    *)      A_RUST="${A_RS}-unknown-${OS}-musl" ;;   # musl builds run on glibc too
+  esac
+}
+
+# ------------------------------------------------------------------ modules ----
+# A module is a sourced sh file that describes one tool. It runs with every
+# platform variable above in scope and sets:
+#
+#   URL     where to get it                        (required, unless mod_install)
+#   KIND    bin | targz | tarxz | zip              (default bin)
+#   EXE     binary name inside the archive         (default the tool name)
+#   V       version, for the message and the URL   (optional)
+#   DESC    one line, for `shlf list`              (optional)
+#   UNSUP   why it cannot run here                 (optional, blocks install)
+#
+#   SESSION 1 if this is an interactive session rather than a one-shot tool.
+#           The core then runs it and waits, so it can say how to get back in
+#           once you leave, instead of exec'ing and losing the thread.
+#
+# and may define:
+#
+#   mod_install <dest> <tmpdir>   bespoke install, leaves an executable at dest
+#
+# See mods/zsh.sh for a bespoke install, mods/fish.sh for a session, and
+# mods/croc.sh for the simple shape.
+
+shlf_mod() { # name -> prints path to the module file
+  if [ -n "$SHLF_MODS" ] && [ -f "$SHLF_MODS/$1.sh" ]; then
+    printf '%s\n' "$SHLF_MODS/$1.sh"; return 0
+  fi
+  shlf_c=$SHLF_HOME/mods/$1.sh
+  if [ -f "$shlf_c" ] && [ "$SHLF_REFRESH" != 1 ]; then
+    printf '%s\n' "$shlf_c"; return 0
+  fi
+  if shlf_dl "$SHLF_BASE/mods/$1.sh" "$shlf_c.new" 2>/dev/null; then
+    mv "$shlf_c.new" "$shlf_c"
+    printf '%s\n' "$shlf_c"; return 0
+  fi
+  rm -f "$shlf_c.new"
+  return 1
+}
+
+shlf_load() { # name -> populates the variables above
+  URL=; KIND=bin; EXE=$1; V=; DESC=; UNSUP=; SESSION=0
+  unset -f mod_install 2>/dev/null || :
+  shlf_f=$(shlf_mod "$1") || return 1
+  . "$shlf_f"
+  if [ -z "$URL" ] && [ -z "$UNSUP" ] && ! command -v mod_install >/dev/null 2>&1; then
+    UNSUP="module $1 set no URL"
+  fi
+}
+
+shlf_index() { # prints path to the module index
+  if [ -n "$SHLF_MODS" ] && [ -f "$SHLF_MODS/index" ]; then
+    printf '%s\n' "$SHLF_MODS/index"; return 0
+  fi
+  shlf_i=$SHLF_HOME/mods/index
+  if [ -f "$shlf_i" ] && [ "$SHLF_REFRESH" != 1 ]; then
+    printf '%s\n' "$shlf_i"; return 0
+  fi
+  if shlf_dl "$SHLF_BASE/mods/index" "$shlf_i.new" 2>/dev/null; then
+    mv "$shlf_i.new" "$shlf_i"
+    printf '%s\n' "$shlf_i"; return 0
+  fi
+  rm -f "$shlf_i.new"
+  return 1
+}
+
+# ---------------------------------------------------------------- integrity ----
+# Optional sums.txt hosted next to this script: "<sha256>  <asset-basename>".
+# Unlisted assets pass unless SHLF_STRICT=1. Mirror your binaries and publish
+# sums.txt if you want one trusted origin instead of a dozen.
+
+shlf_sha256() { # file
+  (
+    PATH=${SHLF_SYSPATH:-$PATH}
+    if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | cut -d' ' -f1
+    elif command -v shasum >/dev/null 2>&1; then shasum -a 256 "$1" | cut -d' ' -f1
+    elif command -v openssl >/dev/null 2>&1; then openssl dgst -sha256 "$1" | sed 's/.*= *//'
+    else exit 1
+    fi
+  )
+}
+
+shlf_verify() { # file asset-basename
+  [ -f "$SHLF_HOME/sums.txt" ] || shlf_dl "$SHLF_BASE/sums.txt" "$SHLF_HOME/sums.txt" 2>/dev/null || :
+  shlf_want=$(grep -E "[[:space:]]$2\$" "$SHLF_HOME/sums.txt" 2>/dev/null | head -1 | cut -d' ' -f1 || :)
+  if [ -z "$shlf_want" ]; then
+    if [ "$SHLF_STRICT" = 1 ]; then shlf_die "$2 is not listed in sums.txt and SHLF_STRICT=1"; fi
+    return 0
+  fi
+  if ! shlf_got=$(shlf_sha256 "$1"); then
+    if [ "$SHLF_STRICT" = 1 ]; then shlf_die "no sha256 tool on this box"; fi
+    return 0
+  fi
+  [ "$shlf_got" = "$shlf_want" ] || shlf_die "checksum mismatch for $2"
+  shlf_say "verified $2"
+}
+
+# --------------------------------------------------------------- extraction ----
+# xz gets four fallbacks because slim images routinely drop it. Python's lzma is
+# stdlib, so python3 alone is enough.
+
+shlf_unpack() { # archive kind exe dest tmpdir
+  (
+    PATH=${SHLF_SYSPATH:-$PATH}
+    case $2 in
+      bin) cp "$1" "$4" ;;
+      targz) gzip -dc "$1" | tar -C "$5" -xf - ;;
+      tarxz)
+        if command -v xz >/dev/null 2>&1; then xz -dc "$1" | tar -C "$5" -xf -
+        elif command -v unxz >/dev/null 2>&1; then unxz -c "$1" | tar -C "$5" -xf -
+        elif command -v xzcat >/dev/null 2>&1; then xzcat "$1" | tar -C "$5" -xf -
+        elif command -v python3 >/dev/null 2>&1; then
+          python3 -c 'import lzma,sys,shutil; shutil.copyfileobj(lzma.open(sys.argv[1]),sys.stdout.buffer)' "$1" \
+            | tar -C "$5" -xf -
+        elif command -v busybox >/dev/null 2>&1 && busybox unxz -c "$1" >/dev/null 2>&1; then
+          busybox unxz -c "$1" | tar -C "$5" -xf -
+        else shlf_die "$3 ships .tar.xz and this box has no xz or python3"
+        fi ;;
+      zip)
+        if command -v unzip >/dev/null 2>&1; then unzip -qo "$1" -d "$5"
+        elif command -v python3 >/dev/null 2>&1; then
+          python3 -c 'import sys,zipfile;zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])' "$1" "$5"
+        else shlf_die "$3 ships .zip and this box has no unzip or python3"
+        fi ;;
+      *) shlf_die "module set an unknown KIND: $2" ;;
+    esac
+    if [ "$2" != bin ]; then
+      # Inner archive layouts vary, so search rather than hardcode a path.
+      shlf_f=$(find "$5" -type f -name "$3" 2>/dev/null | head -1)
+      [ -n "$shlf_f" ] || shlf_die "found no '$3' binary inside the archive"
+      cp "$shlf_f" "$4"
+    fi
+    chmod +x "$4"
+  )
+}
+
+# Sets SHLF_BIN on success. On failure returns nonzero with SHLF_ERR set, so the
+# caller decides whether that is fatal.
+shlf_ensure() { # tool
+  SHLF_ERR=
+  if ! shlf_load "$1"; then
+    SHLF_ERR="unknown tool: $1 (no module at $SHLF_BASE/mods/$1.sh)"; return 1
+  fi
+  if [ -n "$UNSUP" ]; then SHLF_ERR=$UNSUP; return 1; fi
+
+  SHLF_BIN=$SHLF_HOME/tools/$1
+  if [ -x "$SHLF_BIN" ] && [ "$SHLF_REFRESH" != 1 ]; then return 0; fi
+
+  shlf_tmp=$SHLF_HOME/.t.$$; mkdir -p "$shlf_tmp"
+  trap 'rm -rf "$shlf_tmp"' EXIT INT TERM
+
+  if command -v mod_install >/dev/null 2>&1; then
+    shlf_say "installing $1 ${V:+v$V }for $OS/$A_GO"
+    if ! mod_install "$SHLF_BIN.new" "$shlf_tmp"; then
+      SHLF_ERR="module $1 failed to install"
+      rm -rf "$shlf_tmp"; trap - EXIT INT TERM; return 1
+    fi
+  else
+    shlf_ar=$shlf_tmp/dl
+    shlf_hit=0
+    if [ -n "$SHLF_MIRROR" ]; then
+      shlf_say "fetching $1 from mirror"
+      if shlf_dl "$SHLF_MIRROR/$OS-$A_GO/$1" "$shlf_ar" 2>/dev/null; then
+        shlf_hit=1; KIND=bin
+      elif [ "$SHLF_MIRROR_ONLY" = 1 ]; then
+        SHLF_ERR="$1 is not on the mirror and SHLF_MIRROR_ONLY=1"
+        rm -rf "$shlf_tmp"; trap - EXIT INT TERM; return 1
+      fi
+    fi
+    if [ "$shlf_hit" = 0 ]; then
+      shlf_say "fetching $1 ${V:+v$V }for $OS/$A_GO"
+      if ! shlf_dl "$URL" "$shlf_ar"; then
+        SHLF_ERR="download failed: $URL"
+        rm -rf "$shlf_tmp"; trap - EXIT INT TERM; return 1
+      fi
+      shlf_verify "$shlf_ar" "${URL##*/}"
+    fi
+    if ! shlf_unpack "$shlf_ar" "$KIND" "$EXE" "$SHLF_BIN.new" "$shlf_tmp"; then
+      SHLF_ERR="could not unpack $1"
+      rm -rf "$shlf_tmp"; trap - EXIT INT TERM; return 1
+    fi
+  fi
+
+  mv "$SHLF_BIN.new" "$SHLF_BIN"   # atomic, so an interrupted run leaves no stub
+  rm -rf "$shlf_tmp"; trap - EXIT INT TERM
+}
+
+# Everything shlf writes lives under one root. Worth saying out loud: on a box
+# you do not own, where a tool just put 20 MB matters, and so does knowing it
+# is one directory to delete.
+shlf_show_dirs() {
+  shlf_say "writing under $SHLF_HOME  (bin, tools, mods, home)"
+  if [ "$SHLF_KEEP_HOME" = 1 ]; then
+    shlf_say "SHLF_KEEP_HOME=1, so shells use your real \$HOME"
+  else
+    shlf_say "with its own \$HOME at $SHLF_HOME/home, so your dotfiles stay untouched"
+  fi
+}
+
+shlf_dirs() {   # the scriptable version, on stdout
+  printf 'cache\t%s\n'    "$SHLF_HOME"
+  printf 'commands\t%s\n' "$SHLF_HOME/bin"
+  printf 'binaries\t%s\n' "$SHLF_HOME/tools"
+  printf 'modules\t%s\n'  "$SHLF_HOME/mods"
+  [ "$SHLF_KEEP_HOME" = 1 ] || printf 'home\t%s\n' "$SHLF_HOME/home"
+}
+
+# Printed after an interactive session ends, because by then the terminal has
+# scrolled well past everything else.
+shlf_reentry() { # [command]
+  shlf_say "back in with:  $(shlf_quote "$SHLF_HOME/bin/shlf")${1:+ $1}"
+}
+
+# One bad name in the list must not stop the rest, or the whole boot.
+shlf_eager() { # [tools...], defaulting to $SHLF_EAGER
+  shlf_want=${*:-$SHLF_EAGER}
+  [ -n "$shlf_want" ] || return 0
+  shlf_bad=
+  for shlf_t in $shlf_want; do
+    if ! shlf_ensure "$shlf_t"; then
+      shlf_say "$SHLF_ERR"
+      shlf_bad="${shlf_bad:+$shlf_bad }$shlf_t"
+    fi
+  done
+  [ -z "$shlf_bad" ] || shlf_say "could not install: $shlf_bad"
+}
+
+# ------------------------------------------------------------- self-install ----
+# Never writes into $PWD: doing that can clobber the very script being run.
+
+shlf_self_install() {
+  shlf_dest=$SHLF_HOME/bin/shlf
+  if [ -n "$SHLF_SELF" ]; then
+    if [ "$SHLF_SELF" != "$shlf_dest" ]; then
+      cp "$SHLF_SELF" "$shlf_dest.new" && mv "$shlf_dest.new" "$shlf_dest"
+    fi
+  else
+    shlf_dl "$SHLF_BASE/shlf" "$shlf_dest.new" || shlf_die "could not fetch myself from $SHLF_BASE/shlf"
+    mv "$shlf_dest.new" "$shlf_dest"
+  fi
+  chmod +x "$shlf_dest"
+}
+
+# Reads the index rather than loading every module, so linking costs one fetch.
+shlf_link() { # [tools...]
+  if [ $# -gt 0 ]; then
+    shlf_names=$*
+  else
+    shlf_i=$(shlf_index) || shlf_die "no module index at $SHLF_BASE/mods/index"
+    shlf_names=
+    while read -r shlf_n shlf_fl shlf_rest; do
+      case $shlf_n in ''|\#*) continue ;; esac
+      case $shlf_fl in *nolink*) continue ;; esac
+      case $shlf_fl in *linux*) [ "$OS" = linux ] || continue ;; esac
+      shlf_names="${shlf_names:+$shlf_names }$shlf_n"
+    done < "$shlf_i"
+  fi
+  shlf_ld=
+  for shlf_t in $shlf_names; do
+    ln -sf "$SHLF_HOME/bin/shlf" "$SHLF_HOME/bin/$shlf_t" || continue
+    shlf_ld="${shlf_ld:+$shlf_ld }$shlf_t"
+  done
+  shlf_say "linked:${shlf_ld:+ $shlf_ld}"
+}
+
+shlf_list() {
+  shlf_i=$(shlf_index) || shlf_die "no module index at $SHLF_BASE/mods/index"
+  while read -r shlf_n shlf_fl shlf_rest; do
+    case $shlf_n in ''|\#*) continue ;; esac
+    if [ -x "$SHLF_HOME/tools/$shlf_n" ]; then shlf_st=cached
+    else shlf_st=-
+    fi
+    printf '  %-12s %-8s %s\n' "$shlf_n" "$shlf_st" "$shlf_rest"
+  done < "$shlf_i"
+}
+
+# ----------------------------------------------------------------- the tty ----
+# A piped run consumed stdin. Take the terminal back, but only when it can
+# actually be opened. Two traps here, both of which bite silently:
+#   1. A failed redirection on a special built-in (`:`) exits a non-interactive
+#      shell outright, so the probe runs in a subshell that absorbs the death.
+#   2. A piped shell reads its script from stdin, so redirecting stdin can eat
+#      the unread remainder. Safe only because the dispatch `case` below is the
+#      last top-level command, so the whole script is already parsed by then.
+shlf_grab_tty() {
+  if [ -t 0 ]; then return 0; fi
+  if ( true < /dev/tty ) 2>/dev/null; then
+    exec < /dev/tty
+    return 0
+  fi
+  return 1
+}
+
+# ---------------------------------------------------------- the environment ----
+# Applied to everything shlf launches, tools as well as shells.
+
+shlf_env() {
+  # Stub dir first, so every linked tool resolves inside the session and
+  # fetches itself the first time it is typed.
+  PATH="$SHLF_HOME/bin:$SHLF_SYSPATH"; export PATH
+  [ "$SHLF_KEEP_HOME" = 1 ] && return 0
+
+  # Its own HOME, not yours. That is what makes this self-contained: every
+  # shell and tool writes config and history inside $SHLF_HOME, nothing lands
+  # in your real dotfiles, and deleting one directory undoes all of it. It also
+  # sidesteps a read-only or missing $HOME, which used to need its own branch.
+  HOME=$SHLF_HOME/home
+  XDG_CONFIG_HOME=$HOME/.config
+  XDG_DATA_HOME=$HOME/.local/share
+  XDG_STATE_HOME=$HOME/.local/state
+  XDG_CACHE_HOME=$HOME/.cache
+  # Overridden rather than defaulted: an inherited XDG_CONFIG_HOME would send a
+  # shell straight back out to your real config.
+  export HOME XDG_CONFIG_HOME XDG_DATA_HOME XDG_STATE_HOME XDG_CACHE_HOME
+  mkdir -p "$XDG_CONFIG_HOME" "$XDG_DATA_HOME" "$XDG_STATE_HOME" "$XDG_CACHE_HOME"
+}
+
+# Whatever interactive shell the box already has, never one of our own stubs.
+shlf_sysshell() {
+  for shlf_s in "${SHELL:-}" bash ash dash sh; do
+    [ -n "$shlf_s" ] || continue
+    case $shlf_s in "$SHLF_HOME/bin"/*) continue ;; esac
+    if shlf_c=$(PATH=${SHLF_SYSPATH:-$PATH} command -v "$shlf_s" 2>/dev/null); then
+      printf '%s\n' "$shlf_c"; return 0
+    fi
+  done
+  return 1
+}
+
+shlf_usage() {
+  cat <<EOF
+Shellf — lazy universal entrypoint.  cache: $SHLF_HOME
+
+  shlf <tool> [args...]   fetch once, then run a tool
+  shlf                    alias for \`shlf $SHLF_DEFAULT\`, or install only if none
+  shlf list               show tools and which are cached
+  shlf which <tool>       print the cached path, fetching if needed
+  shlf setup              install, then print shell code putting it on PATH
+  shlf install <tools>    install now instead of on first use
+  shlf link [tools]       symlink tool names next to shlf, busybox style
+  shlf env                print the PATH export line
+  shlf dirs               print every directory it writes to
+  shlf self-install       copy shlf into the cache dir
+  shlf clean              delete the cache
+
+Tools are modules under $SHLF_BASE/mods/, fetched on demand.
+
+env: SHLF_HOME SHLF_BASE SHLF_MODS SHLF_MIRROR SHLF_MIRROR_ONLY SHLF_STRICT
+     SHLF_REFRESH SHLF_DEFAULT SHLF_EAGER SHLF_KEEP_HOME SHLF_V_<TOOL>
+EOF
+}
+
+# ----------------------------------------------------------------- dispatch ----
+
+# Identify our own file so self-install copies instead of re-downloading. A
+# piped run has no script file and \$0 is just "sh", so match on the magic.
+SHLF_SELF=
+if [ -f "$0" ] && grep -q SHLF_MAGIC_a7f3 "$0" 2>/dev/null; then SHLF_SELF=$0; fi
+
+shlf_pick_home
+shlf_syspath
+shlf_platform
+
+# argv0 dispatch, so a symlink named croc runs croc.
+shlf_argv0=${0##*/}
+case $shlf_argv0 in
+  shlf*|sh|dash|ash|bash|busybox|-sh|-ash|-bash) : ;;
+  *) set -- "$shlf_argv0" "$@" ;;
+esac
+
+# A bare `shlf` is an alias for the default command, and also the one case where
+# a missing default falls back to whatever shell the box already has.
+SHLF_IMPLICIT=0
+if [ $# -eq 0 ]; then
+  case $SHLF_DEFAULT in
+    none|off|no|'')
+      shlf_self_install
+      shlf_show_dirs
+      shlf_link
+      shlf_eager
+      shlf_say "add to PATH:  export PATH=\"$SHLF_HOME/bin:\$PATH\""
+      exit 0 ;;
+  esac
+  set -- "$SHLF_DEFAULT"
+  SHLF_IMPLICIT=1
+fi
+
+shlf_cmd=$1; shift
+case $shlf_cmd in
+  -h|--help|help) shlf_usage ;;
+  self-install)   shlf_self_install; shlf_say "installed $SHLF_HOME/bin/shlf" ;;
+  env)            printf 'export PATH="%s/bin:$PATH"\n' "$SHLF_HOME" ;;
+  clean)          rm -rf "$SHLF_HOME"; shlf_say "removed cache" ;;
+  link)           shlf_self_install; shlf_link "$@" ;;
+  install)        shlf_eager "$@" ;;
+  setup)
+    shlf_self_install
+    shlf_show_dirs
+    shlf_link
+    shlf_eager
+    printf 'export PATH="%s/bin:$PATH"\n' "$SHLF_HOME"
+    printf 'export SHLF_HOME=%s\n' "$(shlf_quote "$SHLF_HOME")"
+    shlf_say "eval that and shlf is on PATH in this shell" ;;
+  dirs)           shlf_dirs ;;
+  list)           shlf_list ;;
+  which)
+    [ $# -ge 1 ] || shlf_die "which needs a tool name"
+    shlf_ensure "$1" || shlf_die "$SHLF_ERR"
+    printf '%s\n' "$SHLF_BIN" ;;
+  *)
+    if [ "$SHLF_IMPLICIT" = 1 ]; then
+      shlf_self_install
+      shlf_show_dirs
+      shlf_link
+    elif [ -z "$SHLF_SELF" ]; then
+      shlf_self_install
+    fi
+    shlf_eager                  # before the tty check, so a no-tty install still gets them
+    # Interactive tools need a terminal, not the install pipe.
+    if ! shlf_grab_tty && [ "$SHLF_IMPLICIT" = 1 ]; then
+      shlf_say "no tty, so not starting $shlf_cmd"
+      shlf_say "add to PATH:  export PATH=\"$SHLF_HOME/bin:\$PATH\""
+      exit 0
+    fi
+    if shlf_ensure "$shlf_cmd"; then
+      shlf_env
+      if [ "$SESSION" = 1 ]; then
+        "$SHLF_BIN" "$@"
+        shlf_rc=$?
+        if [ "$SHLF_IMPLICIT" = 1 ]; then shlf_reentry; else shlf_reentry "$shlf_cmd"; fi
+        exit $shlf_rc
+      fi
+      exec "$SHLF_BIN" "$@"
+    fi
+    [ "$SHLF_IMPLICIT" = 1 ] || shlf_die "$SHLF_ERR"
+    shlf_say "$SHLF_ERR"
+    shlf_say "carrying on with a shell this box already has"
+    shlf_alt=$(shlf_sysshell) || shlf_die "found no shell to start"
+    shlf_env
+    "$shlf_alt"
+    shlf_rc=$?
+    shlf_reentry
+    exit $shlf_rc ;;
+esac

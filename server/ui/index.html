@@ -1,0 +1,1003 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Shellf</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #fbfaf8;
+    --panel: #ffffff;
+    --ink: #1c1b19;
+    --dim: #6b675f;
+    --line: #e2ded6;
+    --accent: #1f6f5c;
+    --accent-bg: #eef5f2;
+    --code-bg: #12110f;
+    --code-ink: #eae7e1;
+    --code-dim: #8d8880;
+    --badge: #eef1ea;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #121211;
+      --panel: #1a1a18;
+      --ink: #ecebe7;
+      --dim: #9b968d;
+      --line: #2e2d29;
+      --accent: #4fbfa0;
+      --accent-bg: #17251f;
+      --code-bg: #0c0c0b;
+      --code-ink: #ecebe7;
+      --code-dim: #7d786f;
+      --badge: #24241f;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 2.5rem 1.25rem 4rem;
+    background: var(--bg);
+    color: var(--ink);
+    font: 15px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  .wrap { max-width: 64rem; margin: 0 auto; }
+  h1 { margin: 0 0 .2rem; font-size: 1.6rem; letter-spacing: -.02em; }
+  h1 span { color: var(--dim); font-weight: 400; }
+  .lede { margin: 0 0 2rem; color: var(--dim); max-width: 36rem; }
+  h2 {
+    font-size: .8rem;
+    text-transform: uppercase;
+    letter-spacing: .07em;
+    color: var(--dim);
+    margin: 2rem 0 .7rem;
+  }
+  h2:first-child { margin-top: 0; }
+  h2 .hint { text-transform: none; letter-spacing: 0; margin-left: .5rem; font-weight: 400; }
+  fieldset { border: 0; margin: 0; padding: 0; }
+  legend { padding: 0; }
+  .note { color: var(--dim); font-size: .8rem; }
+
+  /* layout: sidebar left on wide screens, below the content on narrow ones */
+  .page { display: grid; gap: 2.5rem; grid-template-areas: "main" "side"; }
+  @media (min-width: 56rem) {
+    .page {
+      grid-template-columns: 14.5rem minmax(0, 1fr);
+      grid-template-areas: "side main";
+      gap: 3rem;
+      align-items: start;
+    }
+    .sidebar { position: sticky; top: 2.5rem; }
+  }
+  main { grid-area: main; min-width: 0; }
+  .sidebar { grid-area: side; }
+
+  /* presets sidebar ----------------------------------------------------- */
+  .presetList { list-style: none; margin: 0 0 .8rem; padding: 0; }
+  .presetList li { margin-bottom: .3rem; position: relative; }
+  .presetList .pick {
+    display: block;
+    width: 100%;
+    text-align: left;
+    border: 1px solid var(--line);
+    background: var(--panel);
+    border-radius: .4rem;
+    padding: .45rem 2rem .45rem .6rem;   /* room for the × */
+    cursor: pointer;
+    min-width: 0;
+  }
+  .presetList li:hover .pick { border-color: var(--accent); }
+  .presetList li.on .pick { border-color: var(--accent); background: var(--accent-bg); }
+  .presetList .pname {
+    display: block;
+    font-size: .9rem;
+    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .presetList .psum { display: block; font-size: .75rem; color: var(--dim); }
+  .presetList .del {
+    position: absolute;
+    top: 50%;
+    right: .3rem;
+    transform: translateY(-50%);
+    border: 0;
+    background: none;
+    color: var(--dim);
+    padding: .1rem .35rem;
+    border-radius: .3rem;
+    cursor: pointer;
+    font-size: 1.05rem;
+    line-height: 1;
+    opacity: 0;
+    transition: opacity .12s;
+  }
+  .presetList li:hover .del, .presetList .del:focus-visible { opacity: 1; }
+  .presetList .del:hover { color: var(--ink); background: var(--bg); }
+  /* No hover on a touch screen, so do not hide the only way to delete. */
+  @media (hover: none) { .presetList .del { opacity: 1; } }
+  .saveRow { display: flex; gap: .3rem; }
+  .saveRow input {
+    flex: 1 1 auto;
+    min-width: 0;
+    padding: .4rem .5rem;
+    border: 1px solid var(--line);
+    border-radius: .35rem;
+    background: var(--bg);
+    color: var(--ink);
+    font: inherit;
+    font-size: .88rem;
+  }
+  .sideFoot { margin-top: .6rem; display: flex; flex-direction: column; gap: .3rem; align-items: flex-start; }
+  .links { margin: 0; color: var(--line); font-size: .8rem; }
+  .links .linky { padding: 0; }
+
+  /* card pickers, shared by shells and delivery modes -------------------- */
+  .shellsWrap { position: relative; }
+  .cards { display: flex; flex-wrap: wrap; gap: .5rem; }
+  .cards .card { position: relative; flex: 1 1 8rem; display: flex; }
+  .cards .card:has(.qmark) label { padding-right: 1.9rem; }
+  .cards .card .qmark { position: absolute; top: .45rem; right: .45rem; }
+  .cards label {
+    flex: 1 1 auto;
+    border: 1px solid var(--line);
+    background: var(--panel);
+    border-radius: .5rem;
+    padding: .7rem .85rem;
+    cursor: pointer;
+    transition: border-color .12s;
+  }
+  .cards label:hover { border-color: var(--accent); }
+  .cards input { position: absolute; opacity: 0; pointer-events: none; }
+  .cards input:focus-visible + .name { outline: 2px solid var(--accent); outline-offset: 3px; }
+  .cards label:has(input:checked) {
+    border-color: var(--accent);
+    box-shadow: inset 0 0 0 1px var(--accent);
+  }
+  .name { display: block; font-weight: 600; font-size: .95rem; }
+  .cards .note { display: block; margin-top: .15rem; }
+  /* Only hints at itself once your pointer is already there. */
+  .cards .note[title] { cursor: help; }
+
+  /* tools ---------------------------------------------------------------- */
+  table { width: 100%; border-collapse: collapse; font-size: .88rem; }
+  th, td { text-align: left; padding: .4rem .5rem; border-bottom: 1px solid var(--line); }
+  th { font-size: .75rem; text-transform: uppercase; letter-spacing: .06em; color: var(--dim); font-weight: 600; }
+  td:first-child, th:first-child { width: 1.5rem; padding-right: 0; }
+  tbody tr:hover { background: var(--panel); }
+  td code { font: 12.5px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  td label { display: block; cursor: pointer; }
+  .badge {
+    display: inline-block;
+    font-size: .7rem;
+    padding: .1rem .35rem;
+    border-radius: .25rem;
+    background: var(--badge);
+    color: var(--dim);
+    margin-left: .3rem;
+  }
+
+  /* advanced ------------------------------------------------------------- */
+  details { margin-top: 1.75rem; border-top: 1px solid var(--line); padding-top: .9rem; }
+  summary {
+    cursor: pointer;
+    font-size: .8rem;
+    text-transform: uppercase;
+    letter-spacing: .07em;
+    color: var(--dim);
+    user-select: none;
+  }
+  summary:hover { color: var(--ink); }
+  summary .hint { text-transform: none; letter-spacing: 0; margin-left: .5rem; }
+  details table { margin-top: .9rem; }
+  .grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: .9rem; margin-top: 1rem; }
+  @media (min-width: 40rem) { .grid { grid-template-columns: 1fr 1fr; } }
+  .field { position: relative; }
+  .field label { display: block; font-size: .8rem; color: var(--dim); margin-bottom: .25rem; }
+  .labelRow { display: flex; align-items: center; gap: .25rem; margin-bottom: .25rem; }
+  .labelRow label { margin-bottom: 0; }
+  .qmark {
+    width: 1.1rem;
+    height: 1.1rem;
+    padding: 0;
+    border-radius: 50%;
+    border: 1px solid var(--line);
+    background: var(--panel);
+    color: var(--dim);
+    font-size: .7rem;
+    line-height: 1;
+    cursor: pointer;
+  }
+  .qmark:hover, .qmark[aria-expanded="true"] { color: var(--ink); border-color: var(--accent); }
+  .pop {
+    position: absolute;
+    z-index: 10;
+    top: 100%;
+    left: 0;
+    margin-top: .35rem;
+    width: min(27rem, calc(100vw - 3rem));
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: .5rem;
+    box-shadow: 0 6px 24px rgb(0 0 0 / .18);
+    padding: .85rem .95rem;
+    font-size: .82rem;
+    line-height: 1.5;
+  }
+  .pop h3 { margin: 0 0 .45rem; font-size: .82rem; }
+  .pop p { margin: 0 0 .55rem; }
+  .pop ol { margin: 0; padding-left: 1.15rem; }
+  .pop ol > li { margin-bottom: .4rem; }
+  .pop ul { margin: .35rem 0 0; padding: 0; list-style: none; }
+  .pop ul li {
+    margin: 0;
+    font: 12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    color: var(--dim);
+  }
+  .pop .last { margin: .6rem 0 0; color: var(--dim); }
+  .field input[type=text] {
+    width: 100%;
+    padding: .45rem .55rem;
+    border: 1px solid var(--line);
+    border-radius: .35rem;
+    background: var(--bg);
+    color: var(--ink);
+    font: 13px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .checks { display: flex; flex-direction: column; gap: .6rem; margin-top: 1rem; }
+  .checks label { display: flex; gap: .5rem; align-items: baseline; font-size: .9rem; }
+  /* The explanation belongs under its label, not trailing off the end of it. */
+  .checks .note { display: block; font-size: .75rem; margin-top: .15rem; }
+  .field .note { display: block; font-size: .75rem; margin-top: .3rem; }
+  .inputRow { display: flex; gap: .3rem; align-items: stretch; }
+  .inputRow input { flex: 1 1 auto; min-width: 0; }
+  .lock {
+    flex: 0 0 auto;
+    padding: 0 .55rem;
+    font-size: .95rem;
+    line-height: 1;
+    border: 1px solid var(--line);
+    border-radius: .35rem;
+    background: var(--panel);
+    cursor: pointer;
+  }
+  .lock[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-bg); }
+  .lock:disabled { opacity: .4; cursor: not-allowed; }
+
+  /* command -------------------------------------------------------------- */
+  .cmd {
+    background: var(--code-bg);
+    color: var(--code-ink);
+    border-radius: .6rem;
+    padding: 1rem;
+    overflow-x: auto;
+    margin-top: .8rem;
+  }
+  .cmd pre {
+    margin: 0;
+    font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    white-space: pre;
+  }
+  .cmd .prompt { color: var(--code-dim); user-select: none; }
+  button {
+    font: inherit;
+    font-size: .82rem;
+    padding: .4rem .75rem;
+    border-radius: .35rem;
+    border: 1px solid var(--line);
+    background: var(--panel);
+    color: var(--ink);
+    cursor: pointer;
+  }
+  button:hover { border-color: var(--accent); }
+  button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .linky {
+    border: 0; background: none; color: var(--dim); padding: .2rem 0;
+    text-decoration: underline; text-underline-offset: 2px; font-size: .8rem;
+  }
+  .linky:hover { color: var(--accent); }
+  .copy { margin-top: .7rem; display: flex; align-items: center; gap: .75rem; flex-wrap: wrap; }
+  .said { color: var(--dim); font-size: .8rem; }
+  footer { margin-top: 2.5rem; color: var(--dim); font-size: .82rem; }
+  footer code { font-size: .8rem; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Shellf <span>&mdash; a shell for boxes you can't install on</span></h1>
+  <p class="lede">
+    One command drops a real shell and a set of static tools onto a locked-down
+    server. Nothing installs until you ask for it. Pick a shell, then copy the
+    line.
+  </p>
+
+  <div class="page">
+    <main>
+      <form id="form">
+        <fieldset>
+          <legend><h2>Default shell</h2></legend>
+          <div class="shellsWrap">
+            <div class="cards" id="shells"></div>
+            <div class="pop" id="zshHelp" hidden role="dialog"
+                 aria-label="Why zsh is the big one">
+              <h3>Why zsh is the big one</h3>
+              <p>zsh doesn't ship as a single static binary the way the other two do.
+                <code>romkatv/zsh-bin</code> publishes a relocatable tree instead:
+                <code>bin/zsh</code> plus the <code>share/zsh</code> function library it
+                loads at runtime — completions, <code>compinit</code>, prompt helpers.
+                That is 1,163 function files out of about 4,100 in total. Without them
+                zsh starts, and not much else works.</p>
+              <p>So installing it unpacks 23.7&nbsp;MB into
+                <code>$SHLF_HOME/tools/zsh.d</code> and drops a one-line shim at
+                <code>tools/zsh</code>, so the core still finds one executable where it
+                expects one. Over the wire it is 3.6&nbsp;MB.</p>
+              <p class="last">For comparison, fish is a single 14.1&nbsp;MB binary with its
+                data files built in, and bash is 2.3&nbsp;MB. zsh is also the only tool
+                here that needs the <code>mod_install</code> hook.</p>
+            </div>
+          </div>
+        </fieldset>
+
+        <details id="toolsBox">
+          <summary>Tools <span class="hint" id="toolsHint"></span></summary>
+          <table>
+            <thead>
+              <tr><th><span class="note" aria-hidden="true">&#10003;</span></th><th>Tool</th><th>What it is</th></tr>
+            </thead>
+            <tbody id="tools"><tr><td colspan="3" class="note">Loading&hellip;</td></tr></tbody>
+          </table>
+        </details>
+
+        <details id="adv">
+          <summary>Advanced options</summary>
+          <div class="grid">
+            <div class="field">
+              <label for="tool">Run a tool instead of a shell</label>
+              <input type="text" id="tool" placeholder="croc send file.tar.gz"
+                     autocomplete="off" spellcheck="false">
+            </div>
+            <div class="field">
+              <div class="labelRow">
+                <label for="home">Cache directory <code>SHLF_HOME</code></label>
+                <button type="button" class="qmark" id="homeHelpBtn" aria-expanded="false"
+                        aria-controls="homeHelp" title="How this gets chosen">?</button>
+              </div>
+              <input type="text" id="home" placeholder="/dev/shm/shlf"
+                     autocomplete="off" spellcheck="false">
+              <div class="pop" id="homeHelp" hidden role="dialog"
+                   aria-label="How the cache directory gets chosen">
+                <h3>How this gets chosen</h3>
+                <ol>
+                  <li>This field, if you fill it in. It has to be writable <em>and</em> allow
+                    exec, or shlf stops rather than half-installing somewhere useless.</li>
+                  <li>Otherwise, if shlf is already installed at
+                    <code>&lt;dir&gt;/bin/shlf</code>, it reuses <code>&lt;dir&gt;</code>. That
+                    is how a second run, or a tool linked onto <code>PATH</code>, finds the same
+                    cache with nothing exported.</li>
+                  <li>Otherwise the first of these that passes:
+                    <ul>
+                      <li>$XDG_CACHE_HOME/shlf, else ~/.cache/shlf</li>
+                      <li>~/.shlf</li>
+                      <li>/dev/shm/shlf-&lt;uid&gt;</li>
+                      <li>/tmp/shlf-&lt;uid&gt;</li>
+                      <li>./.shlf</li>
+                    </ul>
+                  </li>
+                  <li>If none of them pass, it stops and asks you to set this.</li>
+                </ol>
+                <p class="last">Passing means it wrote a small script there and ran it, so a
+                  noexec <code>/tmp</code> is ruled out now rather than failing later.</p>
+              </div>
+            </div>
+            <div class="field">
+              <label for="mirror">Binary mirror <code>SHLF_MIRROR</code></label>
+              <div class="inputRow">
+                <input type="text" id="mirror" placeholder="https://mirror.example.com/bin"
+                       autocomplete="off" spellcheck="false">
+                <button type="button" class="lock" id="mirrorLock" aria-pressed="false"
+                        disabled>&#128275;</button>
+              </div>
+              <span class="note">Locked means mirror only: it fails rather than reaching
+                upstream. <code>SHLF_MIRROR_ONLY=1</code></span>
+            </div>
+          </div>
+          <div class="checks">
+            <label>
+              <input type="checkbox" id="addPath">
+              <span>Put <code>shlf</code> on <code>PATH</code> in this shell
+                <span class="note">Not persisted, just the shell you paste into. Turning this
+                  off gives the plain pipe instead.</span>
+              </span>
+            </label>
+            <label>
+              <input type="checkbox" id="keepHome">
+              <span>Keep my real <code>$HOME</code>
+                <span class="note">Sets <code>SHLF_KEEP_HOME=1</code>. Shells read your own
+                  dotfiles instead of a contained home.</span>
+              </span>
+            </label>
+            <label>
+              <input type="checkbox" id="strict">
+              <span>Refuse binaries missing from <code>sums.txt</code>
+                <span class="note">Sets <code>SHLF_STRICT=1</code>. Fails closed if a checksum is absent.</span>
+              </span>
+            </label>
+            <label>
+              <input type="checkbox" id="refresh">
+              <span>Re-download even when cached
+                <span class="note">Sets <code>SHLF_REFRESH=1</code>.</span>
+              </span>
+            </label>
+            <label>
+              <input type="checkbox" id="debug">
+              <span>Show download errors
+                <span class="note">Sets <code>SHLF_DEBUG=1</code>. Prints what each client
+                  attempt failed with.</span>
+              </span>
+            </label>
+          </div>
+        </details>
+
+        <h2>Run this on the box <span class="hint">kept out of presets, since it depends on the box</span></h2>
+        <div class="cards" id="modes"></div>
+        <div class="cmd">
+          <pre><span class="prompt" id="prompt">$ </span><span id="out"></span></pre>
+        </div>
+        <div class="copy">
+          <button type="button" id="copy">Copy</button>
+          <span class="said" id="said" role="status" aria-live="polite"></span>
+        </div>
+      </form>
+    </main>
+
+    <aside class="sidebar">
+      <h2>Presets</h2>
+      <ul class="presetList" id="presetList"></ul>
+      <div class="saveRow">
+        <input type="text" id="presetName" placeholder="Name this setup"
+               aria-label="Preset name" autocomplete="off" spellcheck="false">
+        <button type="button" id="presetSave">Save</button>
+      </div>
+      <div class="sideFoot">
+        <p class="links">
+          <button type="button" class="linky" id="presetExport">Export</button> ·
+          <button type="button" class="linky" id="presetImport">Import</button> ·
+          <button type="button" class="linky" id="presetReset">Reset</button>
+        </p>
+        <input type="file" id="presetFile" accept="application/json,.json" hidden>
+        <span class="said" id="presetSaid" role="status" aria-live="polite"></span>
+      </div>
+    </aside>
+  </div>
+
+  <footer>
+    <strong>Pipe</strong> needs curl or wget on the box. <strong>Paste</strong>
+    carries the same client detection inline, so it works with only Ruby,
+    Python, Perl, or busybox, and tells you plainly when the box has none of
+    them. Each tool is a module under <code>/mods/</code>, fetched the first
+    time you ask for it and cached after that. <code>curl</code> and
+    <code>busybox</code> are never put on <code>PATH</code> automatically,
+    since shadowing them would hijack other scripts on the box. Presets and
+    preferences live in this browser only.
+  </footer>
+</div>
+
+<script>
+(() => {
+  "use strict";
+
+  const KEY = "shellf.prefs.v1";     // the current configuration
+  const PKEY = "shellf.presets.v1";  // saved configurations
+  const MKEY = "shellf.mode.v1";     // delivery mode: remembered, never in a preset
+  const AKEY = "shellf.adv.v1";      // disclosure state
+  const TKEY = "shellf.tools.v1";    // disclosure state
+
+  const SHELLS = [
+    { id: "fish", name: "fish", note: "friendly, opinionated",
+      tip: "like me \u2014 the opinionated part, not the friendly part" },
+    { id: "bash", name: "bash", note: "the safe default" },
+    { id: "zsh",  name: "zsh",  note: "24 MB unpacked", help: "zshHelp" },
+    { id: "none", name: "none", note: "install only, no shell" },
+  ];
+
+  // How the script gets onto the box. This describes the box, not the
+  // configuration, so it is stored on its own and stays out of presets.
+  const MODES = [
+    { id: "curl",  name: "Pipe with curl", note: "the usual" },
+    { id: "wget",  name: "Pipe with wget", note: "when curl is missing" },
+    { id: "paste", name: "Paste it",       note: "when both are missing" },
+  ];
+
+  // Exactly what a preset holds. Everything else is state about this browser.
+  const DEFAULTS = {
+    shell: "fish", tool: "", home: "", mirror: "", eager: [],
+    addPath: true, keepHome: false, strict: false,
+    mirrorOnly: false, refresh: false, debug: false,
+  };
+
+  // Anything arriving from storage or an imported file gets shaped to this
+  // before use, so one bad field cannot break the page.
+  function sanitize(p) {
+    const o = Object.assign({}, DEFAULTS);
+    if (!p || typeof p !== "object") return o;
+    for (const k of Object.keys(DEFAULTS)) {
+      const v = p[k];
+      if (k === "eager") o.eager = Array.isArray(v) ? v.filter((x) => typeof x === "string") : [];
+      else if (typeof DEFAULTS[k] === "boolean") o[k] = typeof v === "boolean" ? v : DEFAULTS[k];
+      else o[k] = typeof v === "string" ? v : DEFAULTS[k];
+    }
+    return o;
+  }
+
+  // Seeded on a first visit only. Delete them all and they stay deleted,
+  // unless you ask for them back.
+  const SEED = [
+    { name: "Install only", prefs: { shell: "none" } },
+    { name: "Grab a file", prefs: { shell: "bash", eager: ["croc", "wormhole"] } },
+    { name: "Poke around", prefs: { shell: "fish", eager: ["rg", "fd", "jq", "dust"] } },
+    { name: "Locked-down box", prefs: { shell: "bash", eager: ["croc"], home: "/dev/shm/shlf", strict: true } },
+  ];
+
+  // The advanced checkboxes, whose element ids match their preference keys.
+  // mirrorOnly is deliberately absent: it is the lock beside the mirror field,
+  // not a checkbox, because it means nothing without a mirror to lock to.
+  const BOOLS = ["addPath", "keepHome", "strict", "refresh", "debug"];
+
+  const el = (id) => document.getElementById(id);
+  const out = el("out"), said = el("said"), psaid = el("presetSaid");
+  const clone = (o) => JSON.parse(JSON.stringify(o));
+  const esc = (s) => String(s).replace(/[&<>"]/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+  // ---- storage, all guarded so a private window still works -------------
+  function readJSON(key, fallback) {
+    try {
+      const raw = localStorage.getItem(key);
+      return raw === null ? fallback : JSON.parse(raw);
+    } catch (e) {
+      return fallback;
+    }
+  }
+  function writeJSON(key, value) {
+    try { localStorage.setItem(key, JSON.stringify(value)); return true; }
+    catch (e) { return false; }
+  }
+
+  let prefs = sanitize(readJSON(KEY, {}));
+
+  let mode = readJSON(MKEY, "curl");
+  if (!MODES.some((m) => m.id === mode)) mode = "curl";
+
+  // An absent key means a first visit, so seed. An empty array means the user
+  // cleared them out, which we leave alone.
+  let presets = readJSON(PKEY, null);
+  if (!Array.isArray(presets)) {
+    presets = clone(SEED);
+    writeJSON(PKEY, presets);
+  }
+  let active = null;   // name of the preset last loaded, for the highlight
+
+  const savePrefs = () => writeJSON(KEY, prefs);
+  const savePresets = () => writeJSON(PKEY, presets);
+  const saveMode = () => writeJSON(MKEY, mode);
+
+  // ---- pickers ----------------------------------------------------------
+  const card = (group) => (o) => `
+    <div class="card">
+      <label>
+        <input type="radio" name="${group}" value="${o.id}">
+        <span class="name">${o.name}</span>
+        <span class="note"${o.tip ? ` title="${esc(o.tip)}"` : ""}>${o.note}</span>
+      </label>${o.help ? `
+      <button type="button" class="qmark" id="${o.help}Btn" aria-expanded="false"
+              aria-controls="${o.help}" title="Why this one is bigger">?</button>` : ""}
+    </div>`;
+  el("shells").innerHTML = SHELLS.map(card("shell")).join("");
+  el("modes").innerHTML = MODES.map(card("mode")).join("");
+
+  // ---- the paste-in bootstrap, fetched only when it is asked for --------
+  let bootstrap = null;
+  let bootstrapFailed = false;
+
+  function needBootstrap() {
+    if (bootstrap !== null || bootstrapFailed) return;
+    bootstrapFailed = true;   // no retry storm if it is not there
+    fetch("bootstrap", { headers: { Accept: "text/plain" } })
+      .then((r) => (r.ok ? r.text() : Promise.reject(new Error(String(r.status)))))
+      .then((t) => { bootstrap = t.replace(/\s+$/, ""); bootstrapFailed = false; render(); })
+      .catch(() => render());
+  }
+
+  // ---- command building -------------------------------------------------
+  function shellQuote(s) {
+    // Quote only when needed, so the common case stays readable.
+    return /^[A-Za-z0-9_.:,+=@%/-]+$/.test(s) ? s : "'" + s.replace(/'/g, `'\\''`) + "'";
+  }
+
+  function envParts(omitDefault) {
+    const tool = prefs.tool.trim();
+    const env = [];
+    // fish is the script's own default, naming a tool overrides the shell
+    // entirely, and the PATH form names the shell in its trailing command. In
+    // all three cases SHLF_DEFAULT would say nothing.
+    if (prefs.shell !== "fish" && !tool && !omitDefault) env.push(`SHLF_DEFAULT=${prefs.shell}`);
+    if (prefs.eager.length) env.push(`SHLF_EAGER=${shellQuote(prefs.eager.join(" "))}`);
+    if (prefs.home.trim()) env.push(`SHLF_HOME=${shellQuote(prefs.home.trim())}`);
+    if (prefs.mirror.trim()) env.push(`SHLF_MIRROR=${shellQuote(prefs.mirror.trim())}`);
+    // Never emitted without a mirror, where it would only be noise.
+    if (prefs.mirrorOnly && prefs.mirror.trim()) env.push("SHLF_MIRROR_ONLY=1");
+    if (prefs.strict) env.push("SHLF_STRICT=1");
+    if (prefs.keepHome) env.push("SHLF_KEEP_HOME=1");
+    if (prefs.refresh) env.push("SHLF_REFRESH=1");
+    if (prefs.debug) env.push("SHLF_DEBUG=1");
+    return env;
+  }
+
+  function buildPipe() {
+    const url = location.origin + "/";
+    const fetcher = mode === "wget" ? `wget -qO- ${url}` : `curl -fsSL ${url}`;
+    const tool = prefs.tool.trim();
+
+    if (!prefs.addPath) {
+      const env = envParts(false);
+      let cmd = `${fetcher} | ${env.length ? env.join(" ") + " " : ""}sh`;
+      if (tool) cmd += ` -s -- ${tool}`;
+      return cmd;
+    }
+
+    // A pipe runs in a subshell and cannot touch this shell's PATH, so ask
+    // shlf for the export line and eval it here instead. What follows the &&
+    // then resolves through the PATH it just set.
+    const env = envParts(true);
+    let cmd = `eval "$(${fetcher} | ${env.length ? env.join(" ") + " " : ""}sh -s -- setup)"`;
+    if (tool) cmd += ` && shlf ${tool}`;
+    else if (prefs.shell === "none") ;                     // set up and stop
+    else if (prefs.shell === "fish") cmd += " && shlf";    // its own default
+    else cmd += ` && shlf ${prefs.shell}`;
+    return cmd;
+  }
+
+  function buildPaste() {
+    if (bootstrap === null) {
+      return bootstrapFailed
+        ? "# Could not load the bootstrap script from this host."
+        : "# Loading the bootstrap script...";
+    }
+    const head = [];
+    const env = envParts(false);
+    // The bootstrap sets PATH in the pasted shell unless told not to.
+    if (!prefs.addPath) env.push("SHLF_NO_PATH=1");
+    // Pasted, so the settings have to be exported rather than prefixed.
+    if (env.length) head.push(`export ${env.join(" ")}`);
+    // Positional parameters survive a paste into an interactive shell, which
+    // is how the bootstrap receives a tool to run.
+    const tool = prefs.tool.trim();
+    if (tool) head.push(`set -- ${tool}`);
+    return (head.length ? head.join("\n") + "\n\n" : "") + bootstrap;
+  }
+
+  const build = () => (mode === "paste" ? buildPaste() : buildPipe());
+
+  function syncLock() {
+    const has = prefs.mirror.trim() !== "";
+    const on = has && prefs.mirrorOnly;
+    const b = el("mirrorLock");
+    b.disabled = !has;
+    b.setAttribute("aria-pressed", on ? "true" : "false");
+    b.textContent = on ? "\u{1F512}" : "\u{1F513}";
+    const what = !has ? "Set a mirror first"
+      : on ? "Mirror only is on. Click to allow falling back upstream."
+           : "Mirror only is off. Click to refuse falling back upstream.";
+    b.setAttribute("aria-label", what);
+    b.setAttribute("title", what);
+  }
+
+  el("mirrorLock").addEventListener("click", () => {
+    if (!prefs.mirror.trim()) return;
+    prefs.mirrorOnly = !prefs.mirrorOnly;
+    savePrefs();
+    render();
+  });
+
+  function render() {
+    const paste = mode === "paste";
+    if (paste) needBootstrap();
+    el("prompt").hidden = paste;
+    syncLock();
+    // The count belongs in the summary, since the list is usually collapsed.
+    const n = prefs.eager.length;
+    el("toolsHint").textContent = n
+      ? `${n} to install up front`
+      : "all install on first use";
+    out.textContent = build();
+    said.textContent = "";
+  }
+
+  // ---- form <-> state ---------------------------------------------------
+  function toForm() {
+    const shell = document.querySelector(`input[name="shell"][value="${prefs.shell}"]`);
+    if (shell) shell.checked = true;
+    const m = document.querySelector(`input[name="mode"][value="${mode}"]`);
+    if (m) m.checked = true;
+    el("tool").value = prefs.tool;
+    el("home").value = prefs.home;
+    el("mirror").value = prefs.mirror;
+    BOOLS.forEach((k) => { el(k).checked = prefs[k]; });
+    document.querySelectorAll('#tools input[type="checkbox"]').forEach((c) => {
+      c.checked = prefs.eager.includes(c.value);
+    });
+    render();
+  }
+
+  function fromForm() {
+    const shell = document.querySelector('input[name="shell"]:checked');
+    const m = document.querySelector('input[name="mode"]:checked');
+    const lock = prefs.mirrorOnly;   // held by the lock button, not the form
+    prefs = sanitize({
+      shell: shell ? shell.value : "fish",
+      tool: el("tool").value,
+      home: el("home").value,
+      mirror: el("mirror").value,
+      eager: Array.from(document.querySelectorAll('#tools input[type="checkbox"]:checked'))
+        .map((c) => c.value),
+    });
+    BOOLS.forEach((k) => { prefs[k] = el(k).checked; });
+    prefs.mirrorOnly = lock;
+    savePrefs();
+    if (m && m.value !== mode) { mode = m.value; saveMode(); }
+    render();
+  }
+
+  el("form").addEventListener("change", fromForm);
+  el("form").addEventListener("input", fromForm);
+
+  el("adv").open = readJSON(AKEY, false) === true;
+  el("adv").addEventListener("toggle", () => writeJSON(AKEY, el("adv").open));
+  el("toolsBox").open = readJSON(TKEY, false) === true;
+  el("toolsBox").addEventListener("toggle", () => writeJSON(TKEY, el("toolsBox").open));
+
+  // ---- explainer popups -------------------------------------------------
+  // Panel id paired with its button, which is always the id plus "Btn".
+  const POPS = ["homeHelp", "zshHelp"];
+
+  function setPop(id, open) {
+    el(id).hidden = !open;
+    el(id + "Btn").setAttribute("aria-expanded", open ? "true" : "false");
+  }
+  function closePops(except) {
+    POPS.forEach((id) => { if (id !== except) setPop(id, false); });
+  }
+
+  POPS.forEach((id) => {
+    el(id + "Btn").addEventListener("click", (e) => {
+      if (e && e.stopPropagation) e.stopPropagation();
+      // The card button sits beside a label, so stop any label activation too.
+      if (e && e.preventDefault) e.preventDefault();
+      const open = el(id).hidden;
+      closePops(open ? id : null);
+      setPop(id, open);
+    });
+  });
+  // Escape and a click anywhere else both close them, as popups should.
+  document.addEventListener("keydown", (e) => {
+    if (e && e.key === "Escape") closePops(null);
+  });
+  document.addEventListener("click", (e) => {
+    const t = e && e.target;
+    POPS.forEach((id) => {
+      if (el(id).hidden) return;
+      if (t && el(id).contains && el(id).contains(t)) return;
+      setPop(id, false);
+    });
+  });
+  closePops(null);
+
+  // ---- presets ----------------------------------------------------------
+  function summarize(p) {
+    const bits = [p.shell || DEFAULTS.shell];
+    const n = Array.isArray(p.eager) ? p.eager.length : 0;
+    if (n) bits.push(`${n} tool${n === 1 ? "" : "s"}`);
+    if (p.tool) bits.push("runs a tool");
+    return bits.join(" · ");
+  }
+
+  function renderPresets() {
+    if (!presets.length) {
+      el("presetList").innerHTML = '<li class="note">No saved presets.</li>';
+      return;
+    }
+    el("presetList").innerHTML = presets.map((p, i) => `
+      <li${p.name === active ? ' class="on"' : ""}>
+        <button type="button" class="pick" data-idx="${i}">
+          <span class="pname">${esc(p.name)}</span>
+          <span class="psum">${esc(summarize(p.prefs || {}))}</span>
+        </button>
+        <button type="button" class="del" data-idx="${i}" data-del
+                aria-label="Delete ${esc(p.name)}" title="Delete">&times;</button>
+      </li>`).join("");
+  }
+
+  function loadPreset(i) {
+    const p = presets[i];
+    if (!p) return;
+    // A preset holds only what it means to set, so anything it omits goes back
+    // to the default rather than lingering from the last configuration. The
+    // delivery mode is not a preset's business, and is left exactly as it was.
+    prefs = sanitize(p.prefs);
+    savePrefs();
+    active = p.name;
+    el("presetName").value = p.name;
+    renderPresets();
+    toForm();
+    psaid.textContent = `Loaded "${p.name}".`;
+  }
+
+  function deletePreset(i) {
+    const p = presets[i];
+    if (!p) return;
+    presets.splice(i, 1);
+    savePresets();
+    if (active === p.name) { active = null; el("presetName").value = ""; }
+    renderPresets();
+    psaid.textContent = `Deleted "${p.name}".`;
+  }
+
+  el("presetList").addEventListener("click", (e) => {
+    const hit = e.target.closest("[data-idx]");
+    if (!hit) return;
+    const i = parseInt(hit.getAttribute("data-idx"), 10);
+    if (!Number.isInteger(i)) return;
+    if (hit.hasAttribute("data-del")) deletePreset(i); else loadPreset(i);
+  });
+
+  el("presetSave").addEventListener("click", () => {
+    const name = el("presetName").value.trim();
+    if (!name) {
+      psaid.textContent = "Give the preset a name first.";
+      el("presetName").focus();
+      return;
+    }
+    const body = { name, prefs: clone(prefs) };
+    const at = presets.findIndex((p) => p.name.toLowerCase() === name.toLowerCase());
+    if (at >= 0) presets[at] = body; else presets.push(body);
+    const stored = savePresets();
+    active = name;
+    renderPresets();
+    psaid.textContent = stored
+      ? (at >= 0 ? `Replaced "${name}".` : `Saved "${name}".`)
+      : "This browser is blocking storage, so it was not saved.";
+  });
+
+  // ---- export and import ------------------------------------------------
+  function importPresets(text) {
+    let data;
+    try { data = JSON.parse(text); } catch (e) { return "That file is not JSON."; }
+    // Accept a bare array or the exported wrapper, whichever someone pastes.
+    const list = Array.isArray(data) ? data
+      : (data && Array.isArray(data.presets) ? data.presets : null);
+    if (!list) return "No presets in that file.";
+    let n = 0;
+    for (const item of list) {
+      const name = item && typeof item.name === "string" ? item.name.trim() : "";
+      if (!name) continue;
+      // Merge by name, so importing someone else's set keeps your own.
+      const body = { name, prefs: sanitize(item.prefs) };
+      const at = presets.findIndex((q) => q.name.toLowerCase() === name.toLowerCase());
+      if (at >= 0) presets[at] = body; else presets.push(body);
+      n += 1;
+    }
+    if (!n) return "No presets in that file.";
+    savePresets();
+    active = null;
+    renderPresets();
+    return `Imported ${n} preset${n === 1 ? "" : "s"}.`;
+  }
+
+  el("presetExport").addEventListener("click", () => {
+    if (!presets.length) { psaid.textContent = "Nothing to export."; return; }
+    const body = JSON.stringify({ presets }, null, 2) + "\n";
+    try {
+      const url = URL.createObjectURL(new Blob([body], { type: "application/json" }));
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "shellf-presets.json";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      psaid.textContent = `Exported ${presets.length}.`;
+    } catch (e) {
+      psaid.textContent = "This browser would not start the download.";
+    }
+  });
+
+  el("presetImport").addEventListener("click", () => el("presetFile").click());
+
+  el("presetFile").addEventListener("change", (e) => {
+    const f = e && e.target && e.target.files && e.target.files[0];
+    if (!f) return;
+    Promise.resolve(f.text())
+      .then((t) => { psaid.textContent = importPresets(t); })
+      .catch(() => { psaid.textContent = "Could not read that file."; });
+    e.target.value = "";   // so picking the same file again still fires
+  });
+
+  el("presetReset").addEventListener("click", () => {
+    presets = clone(SEED);
+    savePresets();
+    active = null;
+    renderPresets();
+    psaid.textContent = "Default presets restored.";
+  });
+
+  renderPresets();
+
+  // ---- copy -------------------------------------------------------------
+  el("copy").addEventListener("click", async () => {
+    const text = build();
+    try {
+      await navigator.clipboard.writeText(text);
+      said.textContent = "Copied.";
+    } catch (e) {
+      // The clipboard API needs a secure context, which plain http is not.
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.select();
+      const ok = document.execCommand && document.execCommand("copy");
+      document.body.removeChild(ta);
+      said.textContent = ok ? "Copied." : "Copy failed - select the line by hand.";
+    }
+  });
+
+  // ---- tools ------------------------------------------------------------
+  fetch("mods/index", { headers: { Accept: "text/plain" } })
+    .then((r) => (r.ok ? r.text() : Promise.reject(new Error(String(r.status)))))
+    .then((text) => {
+      const rows = text.split("\n")
+        .map((l) => l.trim())
+        .filter((l) => l && !l.startsWith("#"))
+        .map((l) => l.split(/\s+/))
+        .map(([name, flags, ...rest]) => ({
+          name,
+          flags: !flags || flags === "-" ? [] : flags.split(","),
+          desc: rest.join(" "),
+        }));
+      if (!rows.length) throw new Error("empty index");
+      el("tools").innerHTML = rows.map((t) => `
+        <tr>
+          <td><input type="checkbox" id="eager-${t.name}" value="${t.name}"
+                     aria-label="Install ${t.name} up front"></td>
+          <td><label for="eager-${t.name}"><code>${t.name}</code></label></td>
+          <td><label for="eager-${t.name}">${t.desc}${
+            t.flags.includes("linux") ? '<span class="badge">Linux only</span>' : ""}${
+            t.flags.includes("nolink") ? '<span class="badge">not on PATH</span>' : ""}</label></td>
+        </tr>`).join("");
+      document.querySelectorAll('#tools input[type="checkbox"]').forEach((c) => {
+        c.checked = prefs.eager.includes(c.value);
+      });
+      // Drop names the host no longer serves, so the command stays runnable.
+      const known = rows.map((t) => t.name);
+      const kept = prefs.eager.filter((n) => known.includes(n));
+      if (kept.length !== prefs.eager.length) {
+        prefs.eager = kept;
+        savePrefs();
+      }
+      render();
+    })
+    .catch(() => {
+      el("tools").innerHTML =
+        '<tr><td colspan="3" class="note">Could not load the module index. ' +
+        'Tools still install on first use.</td></tr>';
+    });
+
+  toForm();
+})();
+</script>
+</body>
+</html>
