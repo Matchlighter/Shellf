@@ -1,6 +1,12 @@
-# Shellf
+<div align="center">
+
+<img src="https://github.com/Matchlighter/Shellf/blob/master/artwork/dir1.png?raw=true" alt="Shellf" width="200"/>
+
+# Shelff
 
 A lazy, universal entrypoint for boxes you can't install anything on.
+
+</div>
 
 ```sh
 curl -fsSL https://sh.example.com | sh                     # install, then a shell
